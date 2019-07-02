@@ -1597,6 +1597,251 @@ TEST(TableView_QueryCopyStringOr)
     CHECK_EQUAL(after_copy_count, 4);
 }
 
+
+TEST(TableView_QueryDelete)
+{
+    Group g;
+    TableRef table = g.add_table("table");
+    TableRef table2 = g.add_table("table2");
+    size_t t2_ints_col_ndx = table2->add_column(type_Int, "ints");
+    size_t table_ints_col_ndx = table->add_column(type_Int, "");
+    DescriptorRef sub;
+    size_t sub_col_ndx = table->add_column(type_Table, "subtab", &sub);
+    size_t sub_int_col_ndx = sub->add_column(type_Int, "val");
+    size_t table_list_col_ndx = table->add_column_link(type_LinkList, "list", *table2);
+    table->add_empty_row();
+    table->add_empty_row();
+    table->add_empty_row();
+    table->add_empty_row();
+    table->set_int(table_ints_col_ndx, 0, 0);
+    table->set_int(table_ints_col_ndx, 1, 1);
+    table->set_int(table_ints_col_ndx, 2, 2);
+    table->set_int(table_ints_col_ndx, 3, 3);
+
+    table2->add_empty_row(5);
+    for (size_t i = 0; i < table2->size(); ++i) {
+        table2->set_int(t2_ints_col_ndx, i, i);
+    }
+
+    constexpr size_t num_subtable_rows = 3;
+    for (size_t i = 0; i < table->size(); ++i) {
+        for (size_t j = 0; j < table2->size(); ++j) {
+            LinkViewRef list = table->get_linklist(table_list_col_ndx, i);
+            list->add(j);
+        }
+        table->get_subtable(sub_col_ndx, i).get()->add_empty_row(num_subtable_rows);
+        for (size_t j = 0; j < num_subtable_rows; ++j) {
+            table->get_subtable(sub_col_ndx, i).get()->set_int(sub_int_col_ndx, j, 1);
+        }
+    }
+
+    table->add_search_index(table_ints_col_ndx);
+    table2->add_search_index(t2_ints_col_ndx);
+
+    // Test if copy-assign of Query in TableView works
+    TableView tv = table->where().find_all();
+
+    Query q = table->where();
+
+    q.group();
+    q.equal(table_ints_col_ndx, 1);
+    q.Or();
+    q.equal(table_ints_col_ndx, 2);
+    q.end_group();
+
+    TableView tv2 = table2->where().find_all();
+    Query query_on_subtable = table->where().subtable(sub_col_ndx).equal(sub_int_col_ndx, 1).end_subtable();
+    Query query_on_list = table->where().links_to(table_list_col_ndx, tv2.get(1));
+
+    TableView tv_from_query = q.find_all();
+
+    CHECK_EQUAL(q.count(), 2);
+    CHECK_EQUAL(tv_from_query.size(), 2);
+
+    Query q2;
+    q2 = table->where().equal(table_ints_col_ndx, 1234);
+
+    CHECK_EQUAL(q2.count(), 0);
+
+    q2 = q;
+    size_t t = q2.count();
+
+    CHECK_EQUAL(t, 2);
+    CHECK_EQUAL(query_on_subtable.count(), 4);
+    CHECK_EQUAL(query_on_list.count(), 4);
+
+    table2->remove(table2->size() - 1);
+    CHECK_EQUAL(query_on_list.count(), 4);
+    LinkViewRef ref0 = table->get_linklist(table_list_col_ndx, 0);
+    ref0->remove(3);
+    CHECK_EQUAL(query_on_list.count(), 4);
+
+    table->get_subtable(1, sub_col_ndx).get()->remove(0);
+    for (size_t i = 0; i < table->get_subtable(1, sub_col_ndx).get()->size(); ++i) {
+        table->get_subtable(1, sub_col_ndx).get()->set_int(sub_int_col_ndx, i, 2);
+    }
+
+    table->remove(0);
+    CHECK_EQUAL(q2.count(), 2);
+    CHECK_EQUAL(q.count(), 2);
+    CHECK_EQUAL(query_on_subtable.count(), 2);
+    tv.sync_if_needed();
+    tv_from_query.sync_if_needed();
+    CHECK_EQUAL(tv_from_query.size(), 2);
+    CHECK_EQUAL(tv.size(), 3);
+    CHECK_EQUAL(query_on_list.count(), 3);
+
+    table->remove(2);
+    CHECK_EQUAL(q2.count(), 2);
+    CHECK_EQUAL(q.count(), 2);
+    tv.sync_if_needed();
+    tv_from_query.sync_if_needed();
+    CHECK_EQUAL(tv_from_query.size(), 2);
+    CHECK_EQUAL(tv.size(), 2);
+    CHECK_EQUAL(query_on_subtable.count(), 1);
+    CHECK_EQUAL(query_on_list.count(), 2);
+
+    table->remove(1);
+    CHECK_EQUAL(q2.count(), 1);
+    CHECK_EQUAL(q.count(), 1);
+    tv_from_query.sync_if_needed();
+    tv.sync_if_needed();
+    CHECK_EQUAL(tv.size(), 1);
+    CHECK_EQUAL(tv_from_query.size(), 1);
+    CHECK_EQUAL(query_on_subtable.count(), 0);
+    CHECK_EQUAL(query_on_list.count(), 1);
+}
+
+ONLY(TableView_QueryIndexEqualDelete)
+{
+    Group g;
+    TableRef table = g.add_table("table");
+    size_t pre_column_ndx = table->add_column(type_Int, "noise");
+    size_t table_ints_col_ndx = table->add_column(type_Int, "ints");
+
+    TableRef parent = g.add_table("parent_table");
+    size_t id_col_ndx = parent->add_column(type_Int, "id");
+    size_t list_col_ndx = parent->add_column_link(type_LinkList, "children", *table);
+
+    constexpr size_t num_rows = 200;
+
+    for (size_t i = 0; i < num_rows; ++i) {
+        size_t row_ndx = table->add_empty_row();
+        table->set_int(table_ints_col_ndx, row_ndx, i);
+    }
+
+    for (size_t i = 0; i < num_rows; ++i) {
+        size_t row_ndx = parent->add_empty_row();
+        parent->set_int(id_col_ndx, row_ndx, i);
+        LinkViewRef list = parent->get_linklist(list_col_ndx, row_ndx);
+//        list->add(i);
+        for (size_t j = 0; j < table->size(); ++j) {
+            list->add(j);
+        }
+    }
+
+    table->add_search_index(table_ints_col_ndx);
+
+    std::vector<Query> queries;
+    std::vector<TableView> table_views;
+
+    bool with_links = true;
+    for (size_t i = 0; i < num_rows; ++i) {
+//        Query q = table->where().equal(table_ints_col_ndx, int64_t(i));
+        Query q = parent->where().links_to(list_col_ndx, table->get(i));
+        CHECK_EQUAL(q.count(), with_links ? num_rows : 1);
+        queries.push_back(std::move(q));
+        table_views.push_back(queries[i].find_all());
+    }
+
+
+    while (table->size() > 0) {
+        std::vector<Query> query_copies = queries;
+        std::vector<TableView> tv_copies = table_views;
+
+        for (size_t i = 0; i < queries.size(); ++i) {
+            CHECK_EQUAL(queries[i].count(), with_links ? queries.size() : 1);
+            CHECK_EQUAL(queries[i].find(), with_links ? 0 : i);
+            table_views[i].sync_if_needed();
+            CHECK_EQUAL(table_views[i].size(), with_links ? queries.size() : 1);
+            CHECK_EQUAL(table_views[i].get(0).get_index(), with_links ? 0 : i);
+
+            Query q_copy = queries[i];
+            CHECK_EQUAL(q_copy.count(), with_links ? queries.size() : 1);
+            CHECK_EQUAL(q_copy.find(), with_links ? 0 : i);
+
+            CHECK_EQUAL(query_copies[i].count(), with_links ? queries.size() : 1);
+            CHECK_EQUAL(query_copies[i].find(), with_links ? 0 : i);
+            CHECK_EQUAL(tv_copies[i].size(), with_links ? queries.size() : 1);
+            CHECK_EQUAL(tv_copies[i].get(0).get_index(), with_links ? 0 : i);
+        }
+
+
+//        parent->remove(parent->size() - 1);
+//        table->remove(table->size() - 1);
+//        queries.pop_back();
+//        table_views.pop_back();
+//        query_copies.pop_back();
+//        tv_copies.pop_back();
+        table->remove(0);
+        parent->remove(0);
+        queries.erase(queries.begin());
+        table_views.erase(table_views.begin());
+        query_copies.erase(query_copies.begin());
+        tv_copies.erase(tv_copies.begin());
+
+        for (size_t i = 0; i < queries.size(); ++i) {
+            CHECK_EQUAL(queries[i].count(), with_links ? queries.size() : 1);
+            CHECK_EQUAL(queries[i].find(), with_links ? 0 : i);
+            table_views[i].sync_if_needed();
+            CHECK_EQUAL(table_views[i].size(), with_links ? queries.size() : 1);
+            CHECK_EQUAL(table_views[i].get(0).get_index(), with_links ? 0 : i);
+
+            Query q_copy = queries[i];
+            CHECK_EQUAL(q_copy.count(), with_links ? queries.size() : 1);
+            CHECK_EQUAL(q_copy.find(), with_links ? 0 : i);
+
+            CHECK_EQUAL(query_copies[i].count(), with_links ? queries.size() : 1);
+            CHECK_EQUAL(query_copies[i].find(), with_links ? 0 : i);
+            tv_copies[i].sync_if_needed();
+            CHECK_EQUAL(tv_copies[i].size(), with_links ? queries.size() : 1);
+            CHECK_EQUAL(tv_copies[i].get(0).get_index(), with_links ? 0 : i);
+
+        }
+    }
+//
+//    // Test if copy-assign of Query in TableView works
+//    TableView tv = table->where().find_all();
+//
+//    Query q = table->where();
+//
+//    q.group();
+////    q.equal(table_ints_col_ndx, 1);
+////    q.Or();
+//    q.equal(table_ints_col_ndx, 2);
+//    q.end_group();
+//
+//    TableView tv_from_query = q.find_all();
+//
+//    CHECK_EQUAL(q.count(), 1);
+//    CHECK_EQUAL(tv_from_query.size(), 1);
+//    CHECK_EQUAL(q.find(), 2);
+////    CHECK_EQUAL(q.find(2), 2);
+//    CHECK_EQUAL(tv_from_query.get(0).get_index(), 2);
+////    CHECK_EQUAL(tv_from_query.get(1).get_index(), 2);
+//
+//    Query q2;
+//    q2 = table->where().equal(table_ints_col_ndx, 1234);
+//    CHECK_EQUAL(q2.count(), 0);
+//
+//    q2 = q;
+//    CHECK_EQUAL(q2.count(), 1);
+////    CHECK_EQUAL(q2.find(), 1);
+//    CHECK_EQUAL(q2.find(), 2);
+
+
+}
+
 TEST(TableView_SortEnum)
 {
     Table table;

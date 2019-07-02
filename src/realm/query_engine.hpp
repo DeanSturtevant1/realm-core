@@ -1015,8 +1015,20 @@ private:
     IntegerNode(const IntegerNode<ColType, Equal>& from, QueryNodeHandoverPatches* patches)
         : BaseType(from, patches)
         , m_needles(from.m_needles)
+        , m_nb_needles(from.m_nb_needles)
+//        , m_index_get(from.m_index_get)
+//        , m_index_end(from.m_index_end)
     {
+//        if (from.m_result.is_attached()) {
+//            ref_type ref = IntegerColumn::create(Allocator::get_default());
+//            m_result.init_from_ref(Allocator::get_default(), ref);
+//
+//            IntegerNodeBase<ColType>::m_condition_column->find_all(m_result, this->m_value, 0, realm::npos);
+//            m_index_get = 0;
+//            m_index_end = m_result.size();
+//        }
     }
+
     size_t find_first_haystack(size_t start, size_t end)
     {
         const auto not_in_set = m_needles.end();
