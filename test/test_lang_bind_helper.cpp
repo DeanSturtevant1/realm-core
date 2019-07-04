@@ -13712,36 +13712,18 @@ ONLY(LangBindHelper_QueryIndexEqualDelete)
     SharedGroup sg_w(*hist_w, SharedGroupOptions(key));
     Group& g = sg_w.begin_write();
     const Group& g_r = sg_r.begin_read();
+    Random random(random_int<unsigned long>());
 
     size_t table_ints_col_ndx;
-    size_t id_col_ndx;
-    size_t list_col_ndx;
     const std::string table_name = "table";
-    const std::string parent_table_name = "parent_table";
-    constexpr size_t num_rows = 20;
+    constexpr size_t num_rows = 200;
     {
         TableRef table = g.add_table(table_name);
-        size_t pre_column_ndx = table->add_column(type_Int, "noise");
         table_ints_col_ndx = table->add_column(type_Int, "ints");
-
-        TableRef parent = g.add_table(parent_table_name);
-        id_col_ndx = parent->add_column(type_Int, "id");
-        list_col_ndx = parent->add_column_link(type_LinkList, "children", *table);
-
 
         for (size_t i = 0; i < num_rows; ++i) {
             size_t row_ndx = table->add_empty_row();
             table->set_int(table_ints_col_ndx, row_ndx, i);
-        }
-
-        for (size_t i = 0; i < num_rows; ++i) {
-            size_t row_ndx = parent->add_empty_row();
-            parent->set_int(id_col_ndx, row_ndx, i);
-            LinkViewRef list = parent->get_linklist(list_col_ndx, row_ndx);
-            //        list->add(i);
-            for (size_t j = 0; j < table->size(); ++j) {
-                list->add(j);
-            }
         }
 
         table->add_search_index(table_ints_col_ndx);
@@ -13754,12 +13736,9 @@ ONLY(LangBindHelper_QueryIndexEqualDelete)
     {
         LangBindHelper::advance_read(sg_r);
         ConstTableRef table = g_r.get_table(table_name);
-        ConstTableRef parent = g_r.get_table(parent_table_name);
-        bool with_links = true;
         for (size_t i = 0; i < num_rows; ++i) {
-            //        Query q = table->where().equal(table_ints_col_ndx, int64_t(i));
-            Query q = parent->where().links_to(list_col_ndx, table->get(i));
-            CHECK_EQUAL(q.count(), with_links ? num_rows : 1);
+            Query q = table->where().equal(table_ints_col_ndx, int64_t(i));
+            CHECK_EQUAL(q.count(), 1);
             queries.push_back(std::move(q));
             table_views.push_back(queries[i].find_all());
         }
@@ -13769,60 +13748,53 @@ ONLY(LangBindHelper_QueryIndexEqualDelete)
             std::vector<TableView> tv_copies = table_views;
 
             for (size_t i = 0; i < queries.size(); ++i) {
-                CHECK_EQUAL(queries[i].count(), with_links ? queries.size() : 1);
-                CHECK_EQUAL(queries[i].find(), with_links ? 0 : i);
+                CHECK_EQUAL(queries[i].count(), 1);
+                CHECK_EQUAL(queries[i].find(), i);
                 table_views[i].sync_if_needed();
-                CHECK_EQUAL(table_views[i].size(), with_links ? queries.size() : 1);
-                CHECK_EQUAL(table_views[i].get(0).get_index(), with_links ? 0 : i);
+                CHECK_EQUAL(table_views[i].size(), 1);
+                CHECK_EQUAL(table_views[i].get(0).get_index(), i);
 
                 Query q_copy = queries[i];
-                CHECK_EQUAL(q_copy.count(), with_links ? queries.size() : 1);
-                CHECK_EQUAL(q_copy.find(), with_links ? 0 : i);
+                CHECK_EQUAL(q_copy.count(), 1);
+                CHECK_EQUAL(q_copy.find(), i);
 
-                CHECK_EQUAL(query_copies[i].count(), with_links ? queries.size() : 1);
-                CHECK_EQUAL(query_copies[i].find(), with_links ? 0 : i);
-                CHECK_EQUAL(tv_copies[i].size(), with_links ? queries.size() : 1);
-                CHECK_EQUAL(tv_copies[i].get(0).get_index(), with_links ? 0 : i);
+                CHECK_EQUAL(query_copies[i].count(), 1);
+                CHECK_EQUAL(query_copies[i].find(), i);
+                CHECK_EQUAL(tv_copies[i].size(), 1);
+                CHECK_EQUAL(tv_copies[i].get(0).get_index(), i);
             }
 
             {
-
                 LangBindHelper::promote_to_write(sg_w);
-                TableRef table = g.get_table(table_name);
-                TableRef parent = g.get_table(parent_table_name);
+                TableRef write_table = g.get_table(table_name);
 
-                //        parent->remove(parent->size() - 1);
-                //        table->remove(table->size() - 1);
-                //        queries.pop_back();
-                //        table_views.pop_back();
-                //        query_copies.pop_back();
-                //        tv_copies.pop_back();
-                table->remove(0);
-                parent->remove(0);
-                queries.erase(queries.begin());
-                table_views.erase(table_views.begin());
-                query_copies.erase(query_copies.begin());
-                tv_copies.erase(tv_copies.begin());
+                size_t ndx_to_remove = random.draw_int_mod(table->size());
+                write_table->remove(ndx_to_remove);
+                queries.erase(queries.begin() + ndx_to_remove);
+                table_views.erase(table_views.begin() + ndx_to_remove);
+                query_copies.erase(query_copies.begin() + ndx_to_remove);
+                tv_copies.erase(tv_copies.begin() + ndx_to_remove);
+
                 LangBindHelper::commit_and_continue_as_read(sg_w);
             }
             LangBindHelper::advance_read(sg_r);
 
             for (size_t i = 0; i < queries.size(); ++i) {
-                CHECK_EQUAL(queries[i].count(), with_links ? queries.size() : 1);
-                CHECK_EQUAL(queries[i].find(), with_links ? 0 : i);
-                table_views[i].sync_if_needed();
-                CHECK_EQUAL(table_views[i].size(), with_links ? queries.size() : 1);
-                CHECK_EQUAL(table_views[i].get(0).get_index(), with_links ? 0 : i);
+                CHECK_EQUAL(queries[i].count(), 1);
+                CHECK_EQUAL(queries[i].find(), i);
+//                table_views[i].sync_if_needed();
+                CHECK_EQUAL(table_views[i].size(), 1);
+                CHECK_EQUAL(table_views[i].get(0).get_index(), i);
 
                 Query q_copy = queries[i];
-                CHECK_EQUAL(q_copy.count(), with_links ? queries.size() : 1);
-                CHECK_EQUAL(q_copy.find(), with_links ? 0 : i);
+                CHECK_EQUAL(q_copy.count(), 1);
+                CHECK_EQUAL(q_copy.find(), i);
 
-                CHECK_EQUAL(query_copies[i].count(), with_links ? queries.size() : 1);
-                CHECK_EQUAL(query_copies[i].find(), with_links ? 0 : i);
-                tv_copies[i].sync_if_needed();
-                CHECK_EQUAL(tv_copies[i].size(), with_links ? queries.size() : 1);
-                CHECK_EQUAL(tv_copies[i].get(0).get_index(), with_links ? 0 : i);
+                CHECK_EQUAL(query_copies[i].count(), 1);
+                CHECK_EQUAL(query_copies[i].find(), i);
+//                tv_copies[i].sync_if_needed();
+                CHECK_EQUAL(tv_copies[i].size(), 1);
+                CHECK_EQUAL(tv_copies[i].get(0).get_index(), i);
             }
         }
     }
